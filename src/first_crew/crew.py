@@ -30,10 +30,9 @@ rag_config = {
 
 # I still define the ollama provider to limit the context window size.
 local_llm = LLM(
-    model="ollama/phi3",
+    model="ollama/llama3.2:1b",  # Much lighter/faster
     base_url="http://localhost:11434",
-    num_ctx=2048, 
-    stop=["<|end|>"]
+    num_ctx=2048
 )
 
 # # 4. [IMPORTANT] Ensure an independent name (.name) and description (.description) is set for each retrieval tool
