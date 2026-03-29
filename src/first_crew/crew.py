@@ -1,4 +1,4 @@
-from crewai import Agent, Crew, Process, Task
+from crewai import Agent, Crew, Process, Task, LLM
 from crewai.project import CrewBase, agent, crew, task
 from crewai.agents.agent_builder.base_agent import BaseAgent
 from typing import List
@@ -28,18 +28,26 @@ rag_config = {
     }
 }
 
-# 4. [IMPORTANT] Ensure an independent name (.name) and description (.description) is set for each retrieval tool
-user_rag_tool = JSONSearchTool(json_path='data/user_subset.json', collection_name='v3_hf_user_data', config=rag_config)
-user_rag_tool.name = "search_user_profile_data"
-user_rag_tool.description = "Useful to retrieve a specific user's giving habits, average stars, and review counts."
+# I still define the ollama provider to limit the context window size.
+local_llm = LLM(
+    model="ollama/phi3",
+    base_url="http://localhost:11434",
+    num_ctx=2048, 
+    stop=["<|end|>"]
+)
 
-item_rag_tool = JSONSearchTool(json_path='data/item_subset.json', collection_name='v3_hf_item_data', config=rag_config)
-item_rag_tool.name = "search_restaurant_feature_data"
-item_rag_tool.description = "Useful to retrieve a specific restaurant's location, categories, attributes, and overall stars."
+# # 4. [IMPORTANT] Ensure an independent name (.name) and description (.description) is set for each retrieval tool
+# user_rag_tool = JSONSearchTool(json_path='data/user_subset.json', collection_name='v3_hf_user_data', config=rag_config)
+# user_rag_tool.name = "search_user_profile_data"
+# user_rag_tool.description = "Useful to retrieve a specific user's giving habits, average stars, and review counts."
 
-review_rag_tool = JSONSearchTool(json_path='data/review_subset.json', collection_name='v3_hf_review_data', config=rag_config)
-review_rag_tool.name = "search_historical_reviews_data"
-review_rag_tool.description = "Useful to retrieve the actual text content of past reviews for users or restaurants."
+# item_rag_tool = JSONSearchTool(json_path='data/item_subset.json', collection_name='v3_hf_item_data', config=rag_config)
+# item_rag_tool.name = "search_restaurant_feature_data"
+# item_rag_tool.description = "Useful to retrieve a specific restaurant's location, categories, attributes, and overall stars."
+
+# review_rag_tool = JSONSearchTool(json_path='data/review_subset.json', collection_name='v3_hf_review_data', config=rag_config)
+# review_rag_tool.name = "search_historical_reviews_data"
+# review_rag_tool.description = "Useful to retrieve the actual text content of past reviews for users or restaurants."
 
 @CrewBase
 class CrewProject2():
@@ -57,14 +65,16 @@ class CrewProject2():
     @agent
     def researcher(self) -> Agent:
         return Agent(
-            config=self.agents_config['researcher'], # type: ignore[index]
+            config=self.agents_config['researcher'], # type: ignore[index],
+            llm=local_llm,
             verbose=True
         )
 
     @agent
     def reporting_analyst(self) -> Agent:
         return Agent(
-            config=self.agents_config['reporting_analyst'], # type: ignore[index]
+            config=self.agents_config['reporting_analyst'], # type: ignore[index],
+            llm=local_llm,
             verbose=True
         )
 
