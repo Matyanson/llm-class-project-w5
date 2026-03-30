@@ -4,7 +4,8 @@ from crewai.agents.agent_builder.base_agent import BaseAgent
 from typing import List
 import os
 from langchain_huggingface import HuggingFaceEmbeddings
-from crewai_tools import JSONSearchTool
+from crewai_tools import RagTool
+from crewai_tools.tools.rag import ProviderSpec, RagToolConfig, VectorDbConfig
 from crewai.knowledge.source.text_file_knowledge_source import TextFileKnowledgeSource
 
 
@@ -25,17 +26,6 @@ yelp_translation_knowledge = TextFileKnowledgeSource(
     file_paths=["yelp_data_translation.md"]
 )
 
-# 3. Dedicated configuration file for RAG Tools (Dictionary format)
-# Since we set MODEL=ollama/phi3 in .env, there is no need to specify the LLM Provider here; the tool will automatically fallback to using Ollama.
-rag_config = {
-    "embedding_model": {
-        "provider": "sentence-transformer", # Specify the use of purely local CPU for automatic chunk generation
-        "config": {
-            "model_name": "BAAI/bge-small-en-v1.5"
-        }
-    }
-}
-
 # I still define the ollama provider to limit the context window size.
 local_llm = LLM(
     model="ollama/llama3.2:1b",  # Much lighter/faster
@@ -43,18 +33,53 @@ local_llm = LLM(
     num_ctx=2048
 )
 
-# # 4. [IMPORTANT] Ensure an independent name (.name) and description (.description) is set for each retrieval tool
-user_rag_tool = JSONSearchTool(json_path='data/user_subset.json', collection_name='v3_hf_user_data', config=rag_config)
+# 3. Dedicated configuration file for RAG Tools (Dictionary format)
+
+vectordb: VectorDbConfig = {
+    "provider": "qdrant",
+    "config": {
+        "collection_name": "v3_hf_user_data"
+    }
+}
+
+embedding_model: ProviderSpec = {
+    "provider": "sentence-transformer",
+    "config": {
+        "model_name": "BAAI/bge-small-en-v1.5"
+    }
+}
+
+def get_rag_tool_config(collection_name: str) -> RagToolConfig:
+    return {
+        # later we can add persistant storage config
+        # "vectordb": {"provider": "qdrant", "config": {"collection_name": collection_name}},
+        "embedding_model": embedding_model
+    }
+
+
+
+print("setting up retrieval tools...")
+# 4. [IMPORTANT] Ensure an independent name (.name) and description (.description) is set for each retrieval tool
+
+# User profile tool
+user_rag_tool = RagTool(config=get_rag_tool_config("v3_hf_user_data"))
 user_rag_tool.name = "search_user_profile_data"
 user_rag_tool.description = "Useful to retrieve a specific user's giving habits, average stars, and review counts."
+user_rag_tool.add(data_type="file", path="data/user_subset.json")
 
-item_rag_tool = JSONSearchTool(json_path='data/item_subset.json', collection_name='v3_hf_item_data', config=rag_config)
+# Restaurant feature tool
+item_rag_tool = RagTool(config=get_rag_tool_config("v3_hf_item_data"))
 item_rag_tool.name = "search_restaurant_feature_data"
 item_rag_tool.description = "Useful to retrieve a specific restaurant's location, categories, attributes, and overall stars."
+item_rag_tool.add(data_type="file", path="data/item_subset.json")
 
-review_rag_tool = JSONSearchTool(json_path='data/review_subset.json', collection_name='v3_hf_review_data', config=rag_config)
+# Reviews tool
+review_rag_tool = RagTool(config=get_rag_tool_config("v3_hf_review_data"))
 review_rag_tool.name = "search_historical_reviews_data"
 review_rag_tool.description = "Useful to retrieve the actual text content of past reviews for users or restaurants."
+review_rag_tool.add(data_type="file", path="data/review_subset.json")
+
+print("retrieval tools setup complete!")
 
 @CrewBase
 class CrewProject2():
