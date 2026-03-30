@@ -5,6 +5,9 @@ from typing import List
 import os
 from langchain_huggingface import HuggingFaceEmbeddings
 from crewai_tools import JSONSearchTool
+from crewai.knowledge.source.text_file_knowledge_source import TextFileKnowledgeSource
+
+
 # If you want to run a snippet of code before or after the crew starts,
 # you can use the @before_kickoff and @after_kickoff decorators
 # https://docs.crewai.com/concepts/crews#example-crew-class-with-decorators
@@ -15,6 +18,11 @@ os.environ["OPENAI_API_KEY"] = "NA"
 # 2. Configure the global Embedding Model (Used for background retrieval such as CrewAI Knowledge)
 embedding_model = HuggingFaceEmbeddings(
     model_name='BAAI/bge-small-en-v1.5'
+)
+
+# 3. Load the translation guide as global knowledge
+yelp_translation_knowledge = TextFileKnowledgeSource(
+    file_paths=["yelp_data_translation.md"]
 )
 
 # 3. Dedicated configuration file for RAG Tools (Dictionary format)
@@ -103,6 +111,7 @@ class CrewProject2():
             agents=self.agents, # Automatically created by the @agent decorator
             tasks=self.tasks, # Automatically created by the @task decorator
             process=Process.sequential,
+            knowledge_sources=[yelp_translation_knowledge],
             verbose=True,
             # process=Process.hierarchical, # In case you wanna use that instead https://docs.crewai.com/how-to/Hierarchical/
         )
