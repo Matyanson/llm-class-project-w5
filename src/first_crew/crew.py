@@ -3,18 +3,33 @@ from crewai.project import CrewBase, agent, crew, task
 from crewai.agents.agent_builder.base_agent import BaseAgent
 from typing import List
 import os
+from dotenv import load_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
 from crewai_tools import RagTool
 from crewai_tools.tools.rag import ProviderSpec, RagToolConfig, VectorDbConfig
 from crewai.knowledge.source.text_file_knowledge_source import TextFileKnowledgeSource
+from crewai_tools import JSONSearchTool
 
+load_dotenv()
 
 # If you want to run a snippet of code before or after the crew starts,
 # you can use the @before_kickoff and @after_kickoff decorators
 # https://docs.crewai.com/concepts/crews#example-crew-class-with-decorators
 
-# 1. Bypass the underlying issue in CrewAI-Tools that forcefully checks for an OpenAI Key
-os.environ["OPENAI_API_KEY"] = "NA"
+# === LLM Provider Selection ===
+llm_provider = os.getenv("LLM_PROVIDER", "ollama").lower()
+
+if llm_provider == "nvidia":
+    # Route through LiteLLM's OpenAI-compatible interface to Nvidia API
+    os.environ["MODEL"] = f"openai/{os.getenv('NVIDIA_MODEL_NAME', 'meta/llama-3.1-8b-instruct')}"
+    os.environ["OPENAI_API_BASE"] = os.getenv("NVIDIA_API_BASE", "https://integrate.api.nvidia.com/v1")
+    os.environ["OPENAI_API_KEY"] = os.getenv("NVIDIA_API_KEY", "")
+else:
+    # Default to local Ollama Phi3
+    os.environ["MODEL"] = os.getenv('OLLAMA_MODEL', "ollama/phi3")
+
+# Workaround for early CrewAI-Tools versions that enforce OpenAI Key validation via Pydantic
+os.environ["OPENAI_API_KEY"] = os.environ.get("OPENAI_API_KEY", "NA")
 
 # 2. Configure the global Embedding Model (Used for background retrieval such as CrewAI Knowledge)
 embedding_model = HuggingFaceEmbeddings(
@@ -26,35 +41,51 @@ yelp_translation_knowledge = TextFileKnowledgeSource(
     file_paths=["yelp_data_translation.md"]
 )
 
-# I still define the ollama provider to limit the context window size.
-local_llm = LLM(
-    model="ollama/llama3.2:1b",  # Much lighter/faster
-    base_url="http://localhost:11434",
-    num_ctx=2048
-)
 
 # 3. Dedicated configuration file for RAG Tools (Dictionary format)
 
-vectordb: VectorDbConfig = {
-    "provider": "qdrant",
-    "config": {
-        "collection_name": "v3_hf_user_data"
+rag_config = {
+    "embedding_model": {
+        "provider": "sentence-transformer",
+        "config": {
+            "model_name": "BAAI/bge-small-en-v1.5"
+        }
     }
 }
 
-embedding_model: ProviderSpec = {
-    "provider": "sentence-transformer",
-    "config": {
-        "model_name": "BAAI/bge-small-en-v1.5"
-    }
-}
+def create_rag_tool(json_path: str, collection_name: str, config: dict, name: str, description: str) -> JSONSearchTool:
+    from crewai.utilities.paths import db_storage_path
+    from crewai_tools.tools.json_search_tool.json_search_tool import FixedJSONSearchToolSchema
+    import sqlite3
+    import os
+    
+    collection_exists = False
+    db_file = os.path.join(db_storage_path(), "chroma.sqlite3")
+    
+    if os.path.exists(db_file):
+        try:
+            # Check native sqlite3 for existing collection to heavily avoid 100% JSON text synchronous chunking bottleneck
+            # and avoid ChromaDB singleton initialization conflicts with CrewAI's internal Settings
+            conn = sqlite3.connect(db_file)
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM collections WHERE name = ?", (collection_name,))
+            if cursor.fetchone() is not None:
+                collection_exists = True
+            conn.close()
+        except Exception:
+            pass
 
-def get_rag_tool_config(collection_name: str) -> RagToolConfig:
-    return {
-        # later we can add persistant storage config
-        # "vectordb": {"provider": "qdrant", "config": {"collection_name": collection_name}},
-        "embedding_model": embedding_model
-    }
+    if collection_exists:
+        tool = JSONSearchTool(collection_name=collection_name, config=config)
+        # CRITICAL: Force the Pydantic schema to hide json_path from the Agent, 
+        # so it doesn't trigger validation errors or pass the path and trigger the 3-hour hash loop!
+        tool.args_schema = FixedJSONSearchToolSchema
+    else:
+        tool = JSONSearchTool(json_path=json_path, collection_name=collection_name, config=config)
+        
+    tool.name = name
+    tool.description = description
+    return tool
 
 
 
@@ -62,22 +93,46 @@ print("setting up retrieval tools...")
 # 4. [IMPORTANT] Ensure an independent name (.name) and description (.description) is set for each retrieval tool
 
 # User profile tool
-user_rag_tool = RagTool(config=get_rag_tool_config("v3_hf_user_data"))
-user_rag_tool.name = "search_user_profile_data"
-user_rag_tool.description = "Useful to retrieve a specific user's giving habits, average stars, and review counts."
-user_rag_tool.add(data_type="file", path="data/user_subset.json")
+user_rag_tool = create_rag_tool(
+    json_path='data/filtered_user.json',
+    collection_name='benchmark_true_fresh_index_Filtered_User_1',
+    config=rag_config,
+    name="search_user_profile_data",
+    description=(
+        "Searches the user profile database using semantic similarity. "
+        "Input MUST be a natural language search_query string, e.g. "
+        "'What are the review habits and average stars for user _BcWyKQL16?'. "
+        "Do NOT pass raw user_id or JSON objects directly."
+    )
+)
 
 # Restaurant feature tool
-item_rag_tool = RagTool(config=get_rag_tool_config("v3_hf_item_data"))
-item_rag_tool.name = "search_restaurant_feature_data"
-item_rag_tool.description = "Useful to retrieve a specific restaurant's location, categories, attributes, and overall stars."
-item_rag_tool.add(data_type="file", path="data/item_subset.json")
+item_rag_tool = create_rag_tool(
+    json_path='data/filtered_item.json',
+    collection_name='benchmark_true_fresh_index_Filtered_Item_1',
+    config=rag_config,
+    name="search_restaurant_feature_data",
+    description=(
+        "Searches the restaurant/business database using semantic similarity. "
+        "Input MUST be a natural language search_query string, e.g. "
+        "'What are the categories, location, and star rating for business abc123?'. "
+        "Do NOT pass raw item_id or JSON objects directly."
+    )
+)
 
 # Reviews tool
-review_rag_tool = RagTool(config=get_rag_tool_config("v3_hf_review_data"))
-review_rag_tool.name = "search_historical_reviews_data"
-review_rag_tool.description = "Useful to retrieve the actual text content of past reviews for users or restaurants."
-review_rag_tool.add(data_type="file", path="data/review_subset.json")
+review_rag_tool = create_rag_tool(
+    json_path='data/test_review.json',
+    collection_name='benchmark_true_fresh_index_Filtered_Review_1',
+    config=rag_config,
+    name="search_historical_reviews_data",
+    description=(
+        "Searches historical review texts using semantic similarity. "
+        "Input MUST be a natural language search_query string, e.g. "
+        "'Find past reviews written by user _BcWyKQL16 about food quality and service'. "
+        "Do NOT pass raw user_id, item_id, or JSON objects directly."
+    )
+)
 
 print("retrieval tools setup complete!")
 
