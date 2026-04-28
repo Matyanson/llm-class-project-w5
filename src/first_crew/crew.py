@@ -153,7 +153,6 @@ class CrewProject2():
     def researcher(self) -> Agent:
         return Agent(
             config=self.agents_config['researcher'], # type: ignore[index],
-            llm=local_llm,
             tools=[user_rag_tool, item_rag_tool, review_rag_tool],
             verbose=True,
             allow_delegation=False
@@ -163,7 +162,6 @@ class CrewProject2():
     def reporting_analyst(self) -> Agent:
         return Agent(
             config=self.agents_config['reporting_analyst'], # type: ignore[index],
-            llm=local_llm,
             verbose=True
         )
 
